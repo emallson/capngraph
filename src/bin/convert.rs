@@ -2,14 +2,14 @@ extern crate capnp;
 pub mod graph_capnp {
     include!(concat!(env!("OUT_DIR"), "/graph_capnp.rs"));
 }
-use graph_capnp::{graph_header, edge};
 use capnp::serialize_packed;
+use graph_capnp::{edge, graph_header};
 extern crate docopt;
 use docopt::Docopt;
 extern crate rustc_serialize;
-use std::path::Path;
-use std::io::{Read, BufReader, BufRead, BufWriter};
 use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Read};
+use std::path::Path;
 use std::str;
 
 const USAGE: &'static str = "
@@ -34,7 +34,7 @@ struct Args {
     arg_source: String,
     arg_dest: String,
     flag_tag: Option<String>,
-    flag_grouped: bool
+    flag_grouped: bool,
 }
 
 struct EdgeIter<R: Read> {
@@ -49,11 +49,17 @@ impl<R: Read> EdgeIter<R> {
         input.read_line(&mut first_line).unwrap();
         let first_row = first_line.split_whitespace().collect::<Vec<&str>>();
         if first_row.len() != 2 {
-            return Err(format!("Header inappropriate length: {}. Expected 2.", first_row.len()));
+            return Err(format!(
+                "Header inappropriate length: {}. Expected 2.",
+                first_row.len()
+            ));
         }
         assert!(first_row.len() == 2);
 
-        Ok((first_row[0].parse::<u32>().unwrap(), first_row[1].parse::<u64>().unwrap()))
+        Ok((
+            first_row[0].parse::<u32>().unwrap(),
+            first_row[1].parse::<u64>().unwrap(),
+        ))
     }
 
     /// Construct an `EdgeIter` instance and read the header of the
@@ -61,9 +67,7 @@ impl<R: Read> EdgeIter<R> {
     pub fn init(input: R) -> Result<(Self, (u32, u64)), String> {
         let mut input = BufReader::new(input);
         let header = Self::read_header(&mut input)?;
-        let iter = EdgeIter {
-            input: input,
-        };
+        let iter = EdgeIter { input: input };
 
         Ok((iter, header))
     }
@@ -83,14 +87,16 @@ impl<R: Read> Iterator for EdgeIter<R> {
                     // intentional. Would rather have the conversion stop
                     // than end up with an incomplete (and incorrect)
                     // dataset.
-                    Some((row[0].parse::<u32>().unwrap(),
-                          row[1].parse::<u32>().unwrap(),
-                          row[2].parse::<f32>().unwrap()))
+                    Some((
+                        row[0].parse::<u32>().unwrap(),
+                        row[1].parse::<u32>().unwrap(),
+                        row[2].parse::<f32>().unwrap(),
+                    ))
                 } else {
                     None
                 }
-            },
-            _ => None
+            }
+            _ => None,
         }
     }
 }
@@ -102,13 +108,13 @@ fn build_edgelist(from: u32, edges: &Vec<(u32, f32)>) -> HeapBuilder {
         let mut em = message.init_root::<edge::Builder>();
         em.set_from(from);
         {
-            let mut to = em.borrow().get_to().init_list(edges.len() as u32);
+            let mut to = em.reborrow().get_to().init_list(edges.len() as u32);
             for (i, &(t, _)) in edges.iter().enumerate() {
                 to.set(i as u32, t);
             }
         }
         {
-            let mut weight = em.borrow().get_weight().init_list(edges.len() as u32);
+            let mut weight = em.reborrow().get_weight().init_list(edges.len() as u32);
             for (i, &(_, w)) in edges.iter().enumerate() {
                 weight.set(i as u32, w);
             }
@@ -123,8 +129,8 @@ fn build_edge(from: u32, to: u32, weight: f32) -> HeapBuilder {
     {
         let mut edge = message.init_root::<edge::Builder>();
         edge.set_from(from);
-        edge.borrow().get_to().set_node(to);
-        edge.borrow().get_weight().set_value(weight);
+        edge.reborrow().get_to().set_node(to);
+        edge.reborrow().get_weight().set_value(weight);
     }
     message
 }
@@ -134,7 +140,8 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| e.exit());
 
-    let (iter, (num_nodes, num_edges)) = EdgeIter::init(File::open(&args.arg_source).unwrap()).unwrap();
+    let (iter, (num_nodes, num_edges)) =
+        EdgeIter::init(File::open(&args.arg_source).unwrap()).unwrap();
     let f = File::create(&args.arg_dest).unwrap();
     let mut writer = BufWriter::new(f);
     // building the capnp message
@@ -144,8 +151,12 @@ fn main() {
         if let Some(tag) = args.flag_tag {
             header.set_tag(tag.as_str());
         } else {
-            header.set_tag(Path::new(&args.arg_source).file_name()
-                           .and_then(|s| s.to_str()).unwrap())
+            header.set_tag(
+                Path::new(&args.arg_source)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap(),
+            )
         }
 
         header.set_num_nodes(num_nodes);
@@ -167,7 +178,7 @@ fn main() {
                 } else {
                     // new source, write out previous edge list
                     let message = build_edgelist(prev, &edges);
-                    serialize_packed::write_message (&mut writer, &message).unwrap();
+                    serialize_packed::write_message(&mut writer, &message).unwrap();
                     // clear previous edgelist
                     edges.clear();
                     // add current edge
@@ -182,16 +193,19 @@ fn main() {
         // write out the last edgelist
         if let Some(prev) = prev_from {
             let message = build_edgelist(prev, &edges);
-            serialize_packed::write_message (&mut writer, &message).unwrap();
+            serialize_packed::write_message(&mut writer, &message).unwrap();
         }
     } else {
         for (from, to, weight) in iter {
             num_read_edges += 1;
             let message = build_edge(from, to, weight);
-            serialize_packed::write_message (&mut writer, &message).unwrap();
+            serialize_packed::write_message(&mut writer, &message).unwrap();
         }
     }
     if num_edges != num_read_edges {
-        panic!("Expected {} edges, read {} edges", num_edges, num_read_edges);
+        panic!(
+            "Expected {} edges, read {} edges",
+            num_edges, num_read_edges
+        );
     }
 }
